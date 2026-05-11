@@ -147,13 +147,48 @@ def plot_history(history, save_path: str = None):
 
 
 # ─── Save & Convert ──────────────────────────────────────────────────────────
-def save_keras_model(model, saved_model_dir: str) -> str:
-    """Simpan model ke format .keras (Keras 3 native)."""
+def save_saved_model(model, saved_model_dir: str, num_classes: int) -> str:
+    """
+    Simpan model ke format TensorFlow SavedModel (saved_model.pb + variables/).
+    Menggunakan tf_keras (legacy Keras 2) karena tf.saved_model.save dan
+    model.export() tidak kompatibel dengan Keras 3 + TF 2.17 + Python 3.12.
+    """
+    import tf_keras
     os.makedirs(saved_model_dir, exist_ok=True)
-    keras_path = os.path.join(saved_model_dir, "model.keras")
-    model.save(keras_path)
-    print(f"Model .keras disimpan ke: {keras_path}")
-    return keras_path
+    tf_saved_path = os.path.join(saved_model_dir, "saved_model")
+
+    # Rebuild arsitektur dengan tf_keras dan transfer bobot
+    tf_keras_model = tf_keras.models.Sequential([
+        tf_keras.layers.Conv2D(32, (3,3), activation="relu", padding="same",
+                               input_shape=(*IMG_SIZE, 3)),
+        tf_keras.layers.BatchNormalization(),
+        tf_keras.layers.MaxPooling2D((2,2)),
+        tf_keras.layers.Conv2D(64, (3,3), activation="relu", padding="same"),
+        tf_keras.layers.BatchNormalization(),
+        tf_keras.layers.MaxPooling2D((2,2)),
+        tf_keras.layers.Conv2D(128, (3,3), activation="relu", padding="same"),
+        tf_keras.layers.BatchNormalization(),
+        tf_keras.layers.MaxPooling2D((2,2)),
+        tf_keras.layers.Conv2D(256, (3,3), activation="relu", padding="same"),
+        tf_keras.layers.BatchNormalization(),
+        tf_keras.layers.MaxPooling2D((2,2)),
+        tf_keras.layers.Conv2D(512, (3,3), activation="relu", padding="same"),
+        tf_keras.layers.BatchNormalization(),
+        tf_keras.layers.MaxPooling2D((2,2)),
+        tf_keras.layers.GlobalAveragePooling2D(),
+        tf_keras.layers.Dense(512, activation="relu"),
+        tf_keras.layers.Dropout(0.5),
+        tf_keras.layers.Dense(256, activation="relu"),
+        tf_keras.layers.Dropout(0.3),
+        tf_keras.layers.Dense(num_classes, activation="softmax"),
+    ], name="food_cnn_savedmodel")
+    tf_keras_model.set_weights(model.get_weights())
+
+    # tf_keras.Model.save ke folder → menghasilkan saved_model.pb + variables/
+    tf_keras_model.save(tf_saved_path, save_format="tf")
+    print(f"SavedModel disimpan ke: {tf_saved_path}")
+    print(f"  Isi: {os.listdir(tf_saved_path)}")
+    return tf_saved_path
 
 
 def save_h5_via_tf_keras(model, saved_model_dir: str, num_classes: int) -> str:
@@ -198,8 +233,11 @@ def save_h5_via_tf_keras(model, saved_model_dir: str, num_classes: int) -> str:
     return h5_path
 
 
-def convert_to_tflite(model, tflite_dir: str):
-    """Konversi ke TFLite via concrete function (kompatibel Keras 3 + TF 2.17)."""
+def convert_to_tflite(model, tflite_dir: str, class_names: list):
+    """
+    Konversi ke TFLite via concrete function (kompatibel Keras 3 + TF 2.17).
+    Juga membuat label.txt sesuai urutan class_indices dari generator.
+    """
     os.makedirs(tflite_dir, exist_ok=True)
     run_model = tf.function(lambda x: model(x))
     concrete_func = run_model.get_concrete_function(
@@ -213,6 +251,13 @@ def convert_to_tflite(model, tflite_dir: str):
         f.write(tflite_model)
     print(f"TFLite model disimpan ke: {tflite_path}")
     print(f"Ukuran TFLite: {os.path.getsize(tflite_path) / 1024:.1f} KB")
+
+    # Buat label.txt — satu nama kelas per baris, urutan sesuai indeks
+    label_path = os.path.join(tflite_dir, "label.txt")
+    with open(label_path, "w") as f:
+        f.write("\n".join(class_names))
+    print(f"label.txt disimpan ke: {label_path}")
+    print(f"  Isi: {class_names}")
 
 
 def convert_to_tfjs(h5_path: str, tfjs_dir: str):
@@ -288,9 +333,14 @@ def main():
     plot_history(history, save_path=plot_path)
 
     # 8. Save models
-    save_keras_model(model, SAVED_MODEL_DIR)
+    # class_indices dari generator: {'burger': 0, 'pizza': 1, 'sushi': 2}
+    # Urutkan berdasarkan indeks agar label.txt sesuai output model
+    class_names = [k for k, v in sorted(train_gen.class_indices.items(), key=lambda x: x[1])]
+    print(f"\nUrutan kelas (sesuai indeks model): {class_names}")
+
+    save_saved_model(model, SAVED_MODEL_DIR, NUM_CLASSES)
     h5_path = save_h5_via_tf_keras(model, SAVED_MODEL_DIR, NUM_CLASSES)
-    convert_to_tflite(model, TFLITE_DIR)
+    convert_to_tflite(model, TFLITE_DIR, class_names)
     convert_to_tfjs(h5_path, TFJS_DIR)
 
     print("\nTraining selesai!")

@@ -12,10 +12,19 @@ from pathlib import Path
 
 # ─── Konstanta ────────────────────────────────────────────────────────────────
 BASE_DIR        = Path(__file__).resolve().parent.parent
-SAVED_MODEL_DIR = BASE_DIR / "models" / "saved_model"
+SAVED_MODEL_DIR = BASE_DIR / "models" / "saved_model" / "saved_model"  # TF SavedModel dir
 TFLITE_PATH     = BASE_DIR / "models" / "tflite" / "model.tflite"
+LABEL_PATH      = BASE_DIR / "models" / "tflite" / "label.txt"
 IMG_SIZE        = (224, 224)
-CLASS_NAMES     = ["burger", "pizza", "sushi"]
+CLASS_NAMES     = ["burger", "pizza", "sushi"]   # fallback jika label.txt tidak ada
+
+
+def _load_class_names() -> list:
+    """Baca nama kelas dari label.txt jika tersedia."""
+    if LABEL_PATH.exists():
+        names = [line.strip() for line in LABEL_PATH.read_text().splitlines() if line.strip()]
+        return names
+    return CLASS_NAMES
 
 
 # ─── Preprocessing ────────────────────────────────────────────────────────────
@@ -30,11 +39,15 @@ def preprocess_image(image_path: str) -> np.ndarray:
 
 # ─── Inferensi SavedModel ─────────────────────────────────────────────────────
 def predict_saved_model(image_path: str) -> dict:
-    """Prediksi menggunakan SavedModel (Keras .keras / SavedModel format)."""
-    model = tf.keras.models.load_model(str(SAVED_MODEL_DIR))
+    """Prediksi menggunakan TF SavedModel (saved_model.pb + variables/)."""
+    model = tf.saved_model.load(str(SAVED_MODEL_DIR))
+    infer = model.signatures["serving_default"]
     img_array = preprocess_image(image_path)
-    predictions = model.predict(img_array, verbose=0)
-    return _format_result(predictions[0])
+    input_tensor = tf.constant(img_array, dtype=tf.float32)
+    output = infer(input_tensor)
+    # Ambil output tensor pertama (nama key bisa berbeda, ambil value pertama)
+    predictions = list(output.values())[0].numpy()[0]
+    return _format_result(predictions)
 
 
 # ─── Inferensi TFLite ─────────────────────────────────────────────────────────
@@ -57,14 +70,15 @@ def predict_tflite(image_path: str) -> dict:
 # ─── Helper ───────────────────────────────────────────────────────────────────
 def _format_result(predictions: np.ndarray) -> dict:
     """Format output prediksi menjadi dict yang mudah dibaca."""
+    class_names     = _load_class_names()
     predicted_idx   = int(np.argmax(predictions))
-    predicted_class = CLASS_NAMES[predicted_idx]
+    predicted_class = class_names[predicted_idx]
     confidence      = float(predictions[predicted_idx])
 
     result = {
         "predicted_class": predicted_class,
         "confidence": confidence,
-        "probabilities": {cls: float(prob) for cls, prob in zip(CLASS_NAMES, predictions)},
+        "probabilities": {cls: float(prob) for cls, prob in zip(class_names, predictions)},
     }
     return result
 

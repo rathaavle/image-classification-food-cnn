@@ -7,19 +7,25 @@ Klasifikasi gambar makanan (Burger, Pizza, Sushi) menggunakan CNN Sequential den
 ```
 image-classification-food-cnn/
 ├── dataset/
-│   ├── train/   burger/ pizza/ sushi/   (800 gambar/kelas)
-│   ├── val/     burger/ pizza/ sushi/   (100 gambar/kelas)
-│   └── test/    burger/ pizza/ sushi/   (100 gambar/kelas)
+│   ├── all/     burger/ pizza/ sushi/   (1000 gambar/kelas — sumber split)
+│   ├── train/   burger/ pizza/ sushi/   (800 gambar/kelas  — 80%)
+│   ├── val/     burger/ pizza/ sushi/   (100 gambar/kelas  — 10%)
+│   └── test/    burger/ pizza/ sushi/   (100 gambar/kelas  — 10%)
 ├── models/
-│   ├── saved_model/        ← best_checkpoint.keras + model.keras + model.h5
-│   ├── tflite/             ← model.tflite
-│   ├── tfjs_model/         ← TensorFlow.js
+│   ├── saved_model/
+│   │   ├── saved_model/        ← TF SavedModel (saved_model.pb + variables/)
+│   │   ├── best_checkpoint.keras
+│   │   └── model.h5
+│   ├── tflite/
+│   │   ├── model.tflite
+│   │   └── label.txt           ← nama kelas per baris (burger/pizza/sushi)
+│   ├── tfjs_model/             ← TensorFlow.js graph model
 │   └── training_history.png
 ├── notebooks/
 │   └── Submission_Akhir.ipynb
 ├── src/
-│   ├── download_dataset.py
-│   ├── prepare_dataset.py
+│   ├── download_dataset.py     ← download + split otomatis via split-folders
+│   ├── prepare_dataset.py      ← split manual dari folder sumber lokal
 │   ├── preprocess.py
 │   ├── train.py
 │   ├── convert_model.py
@@ -46,22 +52,22 @@ pip install -r requirements.txt
 
 ## Setup Dataset
 
-Dataset menggunakan **Food-101** via **TensorFlow Datasets** (tidak perlu Kaggle API).
-Kelas yang digunakan: `burger` (hamburger), `pizza`, `sushi` — masing-masing 1000 gambar.
+Dataset menggunakan **Food-101** via **TensorFlow Datasets**.
+Kelas yang digunakan: `burger` (hamburger), `pizza`, `sushi` — 1000 gambar per kelas.
 
-### Download & split otomatis
+Pembagian dilakukan **secara mandiri** menggunakan library `split-folders`:
 
 ```bash
 python src/download_dataset.py
 ```
 
-Script ini akan:
+Alur yang terjadi:
 
-- Download Food-101 otomatis (~5 GB) via `tensorflow-datasets`
-- Memilih 1000 gambar per kelas
-- Split ke `train/` (800), `val/` (100), `test/` (100) secara otomatis
+1. Download Food-101 otomatis (~5 GB) via `tensorflow-datasets`
+2. Simpan 1000 gambar/kelas ke `dataset/all/<kelas>/`
+3. Split secara random dengan seed=42 → `train/` (80%), `val/` (10%), `test/` (10%)
 
-> Jika dataset sudah ada secara manual, gunakan `prepare_dataset.py` untuk split dari folder sumber:
+> Jika dataset sudah ada secara lokal, gunakan `prepare_dataset.py`:
 >
 > ```bash
 > python src/prepare_dataset.py --source dataset/raw/images --target dataset
@@ -79,7 +85,7 @@ Training akan:
 - Menyimpan checkpoint terbaik berdasarkan `val_accuracy` → `models/saved_model/best_checkpoint.keras`
 - EarlyStopping (patience=7) + ReduceLROnPlateau (factor=0.3, patience=3)
 - Plot loss & accuracy → `models/training_history.png`
-- Menyimpan model ke format `.keras`, `.tflite`, dan TensorFlow.js
+- Menyimpan model ke format **TF SavedModel**, **TFLite + label.txt**, dan **TensorFlow.js**
 
 ## Konversi Model (Opsional)
 
@@ -91,14 +97,15 @@ python src/convert_model.py
 
 Menghasilkan:
 
-- `models/saved_model/model.keras` — Keras 3 native
+- `models/saved_model/saved_model/` — TF SavedModel (`saved_model.pb` + `variables/`)
 - `models/tflite/model.tflite` — TFLite quantized
+- `models/tflite/label.txt` — nama kelas per baris sesuai urutan indeks
 - `models/tfjs_model/` — TensorFlow.js graph model
 
 ## Inferensi
 
 ```bash
-# Menggunakan SavedModel (default)
+# Menggunakan TF SavedModel (default)
 python src/inference.py path/to/image.jpg
 
 # Menggunakan TFLite
@@ -145,17 +152,26 @@ Input (224×224×3)
 - Input size: 224×224×3
 - Output: 3 kelas (burger, pizza, sushi)
 
+## Target Akurasi
+
+| Target  | Akurasi |
+| ------- | ------- |
+| Minimal | ≥ 85%   |
+| Aman    | 90–95%  |
+
 ## Dependencies
 
 Versi lengkap ada di `requirements.txt`. Paket utama:
 
-| Package      | Versi  |
-| ------------ | ------ |
-| tensorflow   | 2.17.0 |
-| tf-keras     | 2.17.0 |
-| tensorflowjs | 4.10.0 |
-| numpy        | 1.26.4 |
-| scikit-learn | 1.5.2  |
-| matplotlib   | 3.9.2  |
-| Pillow       | 10.4.0 |
-| jupyter      | 1.1.1  |
+| Package             | Versi  |
+| ------------------- | ------ |
+| tensorflow          | 2.17.0 |
+| tf-keras            | 2.17.0 |
+| tensorflowjs        | 4.10.0 |
+| tensorflow-datasets | 4.9.6  |
+| split-folders       | 0.5.1  |
+| numpy               | 1.26.4 |
+| scikit-learn        | 1.5.2  |
+| matplotlib          | 3.9.2  |
+| Pillow              | 10.4.0 |
+| jupyter             | 1.1.1  |
