@@ -147,41 +147,95 @@ def plot_history(history, save_path: str = None):
 
 
 # ─── Save & Convert ──────────────────────────────────────────────────────────
-def save_saved_model(model, path: str):
-    os.makedirs(path, exist_ok=True)
-    model.save(path)
-    print(f"SavedModel disimpan ke: {path}")
+def save_keras_model(model, saved_model_dir: str) -> str:
+    """Simpan model ke format .keras (Keras 3 native)."""
+    os.makedirs(saved_model_dir, exist_ok=True)
+    keras_path = os.path.join(saved_model_dir, "model.keras")
+    model.save(keras_path)
+    print(f"Model .keras disimpan ke: {keras_path}")
+    return keras_path
+
+
+def save_h5_via_tf_keras(model, saved_model_dir: str, num_classes: int) -> str:
+    """
+    Simpan model ke .h5 menggunakan tf_keras (legacy Keras 2).
+    Diperlukan agar tensorflowjs_converter bisa membaca model.
+    """
+    import tf_keras
+    os.makedirs(saved_model_dir, exist_ok=True)
+    h5_path = os.path.join(saved_model_dir, "model.h5")
+
+    # Rebuild arsitektur yang sama dengan tf_keras
+    tf_keras_model = tf_keras.models.Sequential([
+        tf_keras.layers.Conv2D(32, (3,3), activation="relu", padding="same",
+                               input_shape=(*IMG_SIZE, 3)),
+        tf_keras.layers.BatchNormalization(),
+        tf_keras.layers.MaxPooling2D((2,2)),
+        tf_keras.layers.Conv2D(64, (3,3), activation="relu", padding="same"),
+        tf_keras.layers.BatchNormalization(),
+        tf_keras.layers.MaxPooling2D((2,2)),
+        tf_keras.layers.Conv2D(128, (3,3), activation="relu", padding="same"),
+        tf_keras.layers.BatchNormalization(),
+        tf_keras.layers.MaxPooling2D((2,2)),
+        tf_keras.layers.Conv2D(256, (3,3), activation="relu", padding="same"),
+        tf_keras.layers.BatchNormalization(),
+        tf_keras.layers.MaxPooling2D((2,2)),
+        tf_keras.layers.Conv2D(512, (3,3), activation="relu", padding="same"),
+        tf_keras.layers.BatchNormalization(),
+        tf_keras.layers.MaxPooling2D((2,2)),
+        tf_keras.layers.GlobalAveragePooling2D(),
+        tf_keras.layers.Dense(512, activation="relu"),
+        tf_keras.layers.Dropout(0.5),
+        tf_keras.layers.Dense(256, activation="relu"),
+        tf_keras.layers.Dropout(0.3),
+        tf_keras.layers.Dense(num_classes, activation="softmax"),
+    ], name="food_cnn_h5")
+
+    # Transfer bobot dari model Keras 3
+    tf_keras_model.set_weights(model.get_weights())
+    tf_keras_model.save(h5_path)
+    print(f"Model .h5 disimpan ke: {h5_path}")
+    return h5_path
 
 
 def convert_to_tflite(model, tflite_dir: str):
+    """Konversi ke TFLite via concrete function (kompatibel Keras 3 + TF 2.17)."""
     os.makedirs(tflite_dir, exist_ok=True)
-    converter = tf.lite.TFLiteConverter.from_keras_model(model)
+    run_model = tf.function(lambda x: model(x))
+    concrete_func = run_model.get_concrete_function(
+        tf.TensorSpec(model.inputs[0].shape, model.inputs[0].dtype)
+    )
+    converter = tf.lite.TFLiteConverter.from_concrete_functions([concrete_func], model)
     converter.optimizations = [tf.lite.Optimize.DEFAULT]
     tflite_model = converter.convert()
     tflite_path = os.path.join(tflite_dir, "model.tflite")
     with open(tflite_path, "wb") as f:
         f.write(tflite_model)
     print(f"TFLite model disimpan ke: {tflite_path}")
+    print(f"Ukuran TFLite: {os.path.getsize(tflite_path) / 1024:.1f} KB")
 
 
-def convert_to_tfjs(saved_model_path: str, tfjs_dir: str):
-    """Konversi ke TensorFlow.js menggunakan tensorflowjs_converter."""
+def convert_to_tfjs(h5_path: str, tfjs_dir: str):
+    """Konversi .h5 ke TensorFlow.js menggunakan tensorflowjs_converter."""
     import subprocess
+    import sys
     os.makedirs(tfjs_dir, exist_ok=True)
+    venv_dir = os.path.dirname(sys.executable)
+    converter_path = os.path.join(venv_dir, "tensorflowjs_converter")
     cmd = [
-        "tensorflowjs_converter",
-        "--input_format=tf_saved_model",
+        converter_path,
+        "--input_format=keras",
         "--output_format=tfjs_graph_model",
-        saved_model_path,
+        h5_path,
         tfjs_dir,
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode == 0:
         print(f"TFJS model disimpan ke: {tfjs_dir}")
+        print(f"File TFJS: {os.listdir(tfjs_dir)}")
     else:
-        print("Gagal konversi TFJS. Pastikan tensorflowjs sudah terinstall:")
-        print("  pip install tensorflowjs")
-        print(result.stderr)
+        print("Gagal konversi TFJS:")
+        print(result.stderr[-400:])
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -234,9 +288,10 @@ def main():
     plot_history(history, save_path=plot_path)
 
     # 8. Save models
-    save_saved_model(model, SAVED_MODEL_DIR)
+    save_keras_model(model, SAVED_MODEL_DIR)
+    h5_path = save_h5_via_tf_keras(model, SAVED_MODEL_DIR, NUM_CLASSES)
     convert_to_tflite(model, TFLITE_DIR)
-    convert_to_tfjs(SAVED_MODEL_DIR, TFJS_DIR)
+    convert_to_tfjs(h5_path, TFJS_DIR)
 
     print("\nTraining selesai!")
 
